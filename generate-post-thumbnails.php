@@ -2,7 +2,7 @@
   Plugin Name:  Generate Post Thumbnails
   Plugin URI:   http://wordpress.shaldybina.com/plugins/generate-post-thumbnails/
   Description:  Tool for mass generation of Wordpress posts thumbnails using the post images.
-  Version:      0.4.1
+  Version:      0.5
   Author:       Maria Shaldybina
   Author URI:   http://shaldybina.com/
 */
@@ -23,6 +23,8 @@ class GeneratePostThumbnails {
 	function GeneratePostThumbnails() { // initialization
 		load_plugin_textdomain( 'generate-post-thumbnails', false, basename( dirname( __FILE__ ) ) . '/locale' );
 		add_action( 'admin_menu', array( $this, 'add_admin_menu' ) );
+		// Uncomment the following line if you want autogeneration of thumbnails after post was saved
+		//add_action( 'save_post', array( $this, 'process_images' ) );
 		add_action( 'wp_ajax_generate_post_thumbnails', array( $this, 'ajax_process_post' ) );
 	}
 
@@ -76,6 +78,9 @@ class GeneratePostThumbnails {
 		}
 		?>
 		<div id="message" class="updated" <?php if ( empty($message) ) : ?>style="display: none;"<?php endif; ?>><?php echo $message; ?></div>
+		<?php if ( ! ( ( $uploads = wp_upload_dir( current_time( 'mysql' ) ) ) && false === $uploads['error'] ) ) : ?>
+		<p class="error"><?php _e( 'Wordpress uploads directory is not accessible. External images are not supported.', 'generate-post-thumbnails' ); ?></p>
+		<?php endif; ?>
 		<form id="generate_thumbs_form" action="?page=generate-post-thumbnails" method="POST">
 			<input type="hidden" name="generate-thumbnails-submit" value="1" />
 			<?php wp_nonce_field( 'generate-thumbnails' ); ?>
@@ -147,50 +152,90 @@ class GeneratePostThumbnails {
 	} // endfunction admin_interface
 
 	function process_images( $post_id, $overwrite = 'skip', $imagenumber = 1 ) { // generating thumbnail for a single post
-		$post = get_post( $post_id );
+		$post = get_post($post_id);
 		if ( !$post ) // if post was not found by id
 			return false;
-		if ( $overwrite == 'skip' && has_post_thumbnail( $post_id ) ) // check if skip existing thumbnail
+		if ( $overwrite == 'skip' && has_post_thumbnail($post_id) ) // check if skip existing thumbnail
 			return false;
 		$wud			= wp_upload_dir();
 		$image			= '';
 		$imagenumber	= preg_replace( '/[^\d]/', '', $imagenumber );
-		preg_match_all( '|<img.*?src=[\'"](' . $wud['baseurl'] . '.*?)[\'"].*?>|i', $post->post_content, $matches ); // search for uploaded images in the post
-		if ( empty( $imagenumber ) || $imagenumber == 0 )
+		//imagenumber was not set or 0
+		if ( empty($imagenumber) || $imagenumber == 0 )
 			return false;
-		if ( isset( $matches ) && isset( $matches[1][$imagenumber-1] ) && strlen( trim( $matches[1][$imagenumber-1] ) ) > 0 )
+		preg_match_all( '|<img.*?src=[\'"](.*?)[\'"].*?>|i', $post->post_content, $matches ); // search for uploaded images in the post
+		if ( isset($matches) && isset($matches[1][$imagenumber-1]) && strlen(trim($matches[1][$imagenumber-1])) > 0 )
 			$image = $matches[1][$imagenumber-1];
 		else { // if image was not found in post
 			delete_post_meta( $post->ID, '_thumbnail_id' );
 			return false;
 		}
-		$parts = pathinfo( $image );
-		$attachments = array();
-		$attachments = get_posts( 'post_type=attachment&numberposts=-1&post_mime_type=image&post_status=null&post_parent=' . $post->ID );
-		$found_attachment = null;
-		foreach ( $attachments as $attachment ) {
-			$metadata = array();
-			$metadata = get_post_meta( $attachment->ID, '_wp_attachment_metadata' );
-			foreach ( $metadata as $metaitem ) {
-				$original_image = $wud['baseurl'] . '/' . $metaitem['file'];
-				if ( $original_image == $image ) { //check if original image was used in post
-					$found_attachment = $attachment->ID;
-					break 2;
-				}
-				elseif ( isset($metaitem['sizes']) && count( $metaitem['sizes'] ) ) { //search for used thumbnail size
-					foreach( $metaitem['sizes'] as $image_size ) {
-						if ( $image_size['file'] == $parts['basename'] ) {
-							$found_attachment = $attachment->ID;
-							break 3;
-						}
-					}
+		$saved_in_wordpress = false;
+		if ( strpos( $image, $wud['baseurl'] ) !== false ) { // image was uploaded on server
+			$parts = pathinfo($image);
+			$attachments = array();
+			global $wpdb;
+			$attachments = $wpdb->get_results("SELECT post_id FROM $wpdb->postmeta WHERE meta_key='_wp_attachment_metadata' AND meta_value like '%" . $parts['basename'] . "%'");
+			if ( is_array($attachments) && count($attachments) > 0 && isset( $attachments[0]->post_id ) ) { // image was found in Wordpress database
+				$saved_in_wordpress = true;
+				$attachment_id = $attachments[0]->post_id;
+				$thumbnail_html = wp_get_attachment_image( $attachment_id, 'thumbnail' );
+				if ( !empty($thumbnail_html) ) {
+					update_post_meta( $post->ID, '_thumbnail_id', $attachment_id );
+					return true;
 				}
 			}
 		}
-		if ( isset( $found_attachment ) && get_post( $found_attachment ) ) {
-			$thumbnail_html = wp_get_attachment_image( $found_attachment, 'thumbnail' );
-			if ( !empty( $thumbnail_html ) ) {
-				update_post_meta( $post->ID, '_thumbnail_id', $found_attachment );
+		if ( !$saved_in_wordpress ) { // image is external
+			if ( ! ( ( $uploads = wp_upload_dir( current_time('mysql') ) ) && false === $uploads['error'] ) )
+				return false; // upload dir is not accessible
+
+			$name_parts = pathinfo($image);
+			$filename = wp_unique_filename( $uploads['path'], $name_parts['basename'] );
+			$unique_name_parts = pathinfo($filename);
+			$newfile = $uploads['path'] . "/$filename";
+
+			// try to upload
+			file_put_contents( $newfile, @file_get_contents($image) );
+			if (! file_exists($newfile) ) // upload was not successful
+				return false;
+			// Set correct file permissions
+			$stat = stat( dirname($newfile) );
+			$perms = $stat['mode'] & 0000666;
+			@chmod( $newfile, $perms );
+			// get file type
+			$wp_filetype = wp_check_filetype( $newfile );
+			extract($wp_filetype);
+
+			// No file type! No point to proceed further
+			if ( ( !$type || !$ext ) && !current_user_can( 'unfiltered_upload' ) )
+				return false;
+			$title = $unique_name_parts['filename'];
+			$content = '';
+
+			// use image exif/iptc data for title and caption defaults if possible
+			if ( $image_meta = @wp_read_image_metadata($newfile) ) {
+				if ( trim($image_meta['title']) )
+					$title = $image_meta['title'];
+				if ( trim($image_meta['caption']) )
+					$content = $image_meta['caption'];
+			}
+
+			// Compute the URL
+			$url = $uploads['url'] . "/$filename";
+
+			// Construct the attachment array
+			$attachment = array(
+								'post_mime_type' => $type,
+								'guid' => $url,
+								'post_parent' => $post_id,
+								'post_title' => $title,
+								'post_content' => $content,
+								);
+			$thumb_id = wp_insert_attachment( $attachment, $newfile, $post_id );
+			if ( !is_wp_error($thumb_id) ) {
+				wp_update_attachment_metadata( $thumb_id, wp_generate_attachment_metadata( $thumb_id, $newfile ) );
+				update_post_meta( $post->ID, '_thumbnail_id', $thumb_id );
 				return true;
 			}
 		}
@@ -198,7 +243,7 @@ class GeneratePostThumbnails {
 	} // endfunction process_images
 
 	function ajax_process_post() { // dealing with ajax requests
-		if ( !current_user_can( 'manage_options' ) )
+		if ( !current_user_can('manage_options') )
 			die('0');
 		if ( $this->process_images( $_POST['post_id'], $_POST['overwrite'], $_POST['imagenumber'] ) )
 			die('1');
