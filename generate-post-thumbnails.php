@@ -2,7 +2,7 @@
   Plugin Name:  Generate Post Thumbnails
   Plugin URI:   http://wordpress.shaldybina.com/plugins/generate-post-thumbnails/
   Description:  Tool for mass generation of Wordpress posts thumbnails using the post images.
-  Version:      0.5
+  Version:      0.6
   Author:       Maria Shaldybina
   Author URI:   http://shaldybina.com/
 */
@@ -157,9 +157,10 @@ class GeneratePostThumbnails {
 			return false;
 		if ( $overwrite == 'skip' && has_post_thumbnail($post_id) ) // check if skip existing thumbnail
 			return false;
-		$wud			= wp_upload_dir();
-		$image			= '';
-		$imagenumber	= preg_replace( '/[^\d]/', '', $imagenumber );
+		$wud		  = wp_upload_dir();
+		$upload_parts = parse_url( $wud['baseurl'] );
+		$image		  = '';
+		$imagenumber  = preg_replace( '/[^\d]/', '', $imagenumber );
 		//imagenumber was not set or 0
 		if ( empty($imagenumber) || $imagenumber == 0 )
 			return false;
@@ -170,8 +171,10 @@ class GeneratePostThumbnails {
 			delete_post_meta( $post->ID, '_thumbnail_id' );
 			return false;
 		}
+
 		$saved_in_wordpress = false;
-		if ( strpos( $image, $wud['baseurl'] ) !== false ) { // image was uploaded on server
+
+		if ( strpos( $image, $wud['baseurl'] ) !== false || ( strpos( $image, 'http:' ) !== 0 && isset( $upload_parts['path'] ) && strpos( $image, $upload_parts['path'] ) === 0 ) ) { // image was uploaded on server in wordpress uploads directory
 			$parts = pathinfo($image);
 			$attachments = array();
 			global $wpdb;
@@ -186,9 +189,13 @@ class GeneratePostThumbnails {
 				}
 			}
 		}
+
 		if ( !$saved_in_wordpress ) { // image is external
+
 			if ( ! ( ( $uploads = wp_upload_dir( current_time('mysql') ) ) && false === $uploads['error'] ) )
 				return false; // upload dir is not accessible
+
+			$content = '';
 
 			$name_parts = pathinfo($image);
 			$filename = wp_unique_filename( $uploads['path'], $name_parts['basename'] );
@@ -196,11 +203,58 @@ class GeneratePostThumbnails {
 			$newfile = $uploads['path'] . "/$filename";
 
 			// try to upload
-			file_put_contents( $newfile, @file_get_contents($image) );
-			if (! file_exists($newfile) ) // upload was not successful
+
+			if ( ini_get( 'allow_url_fopen' ) ) { // check php setting for remote file access
+				$content = @file_get_contents( $image );
+			}
+			elseif ( function_exists( 'curl_init' ) ) { // curl library enabled
+				$ch = curl_init();
+				curl_setopt( $ch, CURLOPT_URL, $image );
+				curl_setopt( $ch, CURLOPT_HEADER, 0 );
+				curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
+				curl_setopt( $ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/531.9 (KHTML, like Gecko) Version/4.0.3 Safari/531.9' );
+				$content = curl_exec( $ch );
+				curl_close( $ch );
+			}
+			else { // custom connect
+				$parsed_url = parse_url( $image );
+				$host = $parsed_url['host'];
+				$path = ( isset( $parsed_url['path'] ) ) ? $parsed_url['path'] : '/';
+				$port = ( isset( $parsed_url['port'] ) ) ? $parsed_url['port'] : '80';
+				$timeout = 10;
+				if ( isset( $parsed_url['query'] ) )
+					$path .= '?' . $parsed_url['query'];
+				$fp = @fsockopen( $host, '80', $errno, $errstr, $timeout );
+
+				if( !$fp )
+					return false; // give up on connecting to remote host
+
+				fputs( $fp, "GET $path HTTP/1.0\r\n" .
+					   "Host: $host\r\n" .
+					   "User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/531.9 (KHTML, like Gecko) Version/4.0.3 Safari/531.9\r\n" .
+					   "Accept: */*\r\n" .
+					   "Accept-Language: en-us,en;q=0.5\r\n" .
+					   "Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n" .
+					   "Keep-Alive: 300\r\n" .
+					   "Connection: keep-alive\r\n" .
+					   "Referer: http://$host\r\n\r\n");
+				stream_set_timeout( $fp, $timeout );
+				// retrieve the response from the remote server
+				while ( $line = fread( $fp, 4096 ) ) {
+					$content .= $line;
+				}
+				fclose( $fp );
+				$pos     = strpos( $content, "\r\n\r\n" );
+				$content = substr( $content, $pos + 4 );
+			}
+
+			file_put_contents( $newfile, $content ); // save image
+
+			if (! file_exists( $newfile ) ) // upload was not successful
 				return false;
+
 			// Set correct file permissions
-			$stat = stat( dirname($newfile) );
+			$stat = stat( dirname( $newfile ) );
 			$perms = $stat['mode'] & 0000666;
 			@chmod( $newfile, $perms );
 			// get file type

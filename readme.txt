@@ -4,7 +4,7 @@ Donate link: http://wordpress.shaldybina.com/donate
 Tags: thumbnails, thumbnail
 Requires at least: 2.9
 Tested up to: 2.9.2
-Stable tag: 0.5
+Stable tag: 0.6
 
 Tool for mass generation of Wordpress posts thumbnails using the post images.
 
@@ -43,6 +43,10 @@ If there is no image for specified image number in the post, then no thumbnail w
 
 == Changelog ==
 
+= 0.6 =
+* Uploading of externally hosted images tries several methods for different configurations
+* Relative paths support fixed
+
 = 0.5 =
 * Added support of externally hosted images
 
@@ -50,6 +54,9 @@ If there is no image for specified image number in the post, then no thumbnail w
 * Released plugin initial version
 
 == Upgrade Notice ==
+
+= 0.6 =
+This version uses different methods to upload externally hosted images for different configurations and supports relative paths to images
 
 = 0.5 =
 This version supports externally hosted images
