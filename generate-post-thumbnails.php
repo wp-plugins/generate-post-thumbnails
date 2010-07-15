@@ -2,7 +2,7 @@
   Plugin Name:  Generate Post Thumbnails
   Plugin URI:   http://wordpress.shaldybina.com/plugins/generate-post-thumbnails/
   Description:  Tool for mass generation of Wordpress posts thumbnails using the post images.
-  Version:      0.6
+  Version:      0.7
   Author:       Maria Shaldybina
   Author URI:   http://shaldybina.com/
 */
@@ -196,7 +196,7 @@ class GeneratePostThumbnails {
 				return false; // upload dir is not accessible
 
 			$content = '';
-
+			$image = preg_replace('/\?.*/', '', $image);
 			$name_parts = pathinfo($image);
 			$filename = wp_unique_filename( $uploads['path'], $name_parts['basename'] );
 			$unique_name_parts = pathinfo($filename);
