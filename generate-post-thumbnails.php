@@ -88,13 +88,6 @@ class GeneratePostThumbnails {
 				<h3><?php _e( 'Thumbnails generation settings', 'generate-post-thumbnails' ); ?></h3>
 				<table class="form-table">
 					<tr valign="top">
-						<th scope="row"><?php _e( 'Overwrite existing thumbnails', 'generate-post-thumbnails' ); ?>:</th>
-						<td>
-							<input type="checkbox" name="overwrite" id="overwrite" value="1" />
-							<label for="rewrite"><?php _e( 'Check this if you want existing post thumbnails to be overwritten with generated thumbnails.', 'generate-post-thumbnails' ); ?></label><br />
-						</td>
-					</tr>
-					<tr valign="top">
 						<th scope="row"><?php _e( 'Image number in the post', 'generate-post-thumbnails' ); ?>:</th>
 						<td>
 							<input type="text" name="imagenumber" id="imagenumber" value="1" size="2"/>
@@ -247,7 +240,10 @@ class GeneratePostThumbnails {
 				$pos     = strpos( $content, "\r\n\r\n" );
 				$content = substr( $content, $pos + 4 );
 			}
-
+			
+			if ( empty( $content ) ) // nothing was found
+				return false;
+			
 			file_put_contents( $newfile, $content ); // save image
 
 			if (! file_exists( $newfile ) ) // upload was not successful
