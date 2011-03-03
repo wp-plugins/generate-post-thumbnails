@@ -3,18 +3,20 @@ Contributors: marynixie
 Donate link: http://wordpress.shaldybina.com/donate
 Tags: thumbnails, thumbnail
 Requires at least: 2.9
-Tested up to: 3.0
-Stable tag: 0.7
+Tested up to: 3.1
+Stable tag: 0.8
 
 Tool for mass generation of Wordpress posts thumbnails using the post images.
 
 == Description ==
 
-This plugin will generate post thumbnails using the post images.
+This plugin generates Featured Image for all posts at once.
 
-Wordpress 2.9 introduced new feature Post Thumbnails, that allows to specify post thumbnails sizes in themes, assign thumbnails for each post and easily display post thumbnail of required size in theme. 
+It is based on WordPres 2.9+ feature - Post Thumbnails. This plugin takes the first image (by default) from post body and assignes it as a post Featured Image. It helps if your theme supports post thumbnails feature and you want to assign Featured Image for all your existing posts.
 
-This plugin will be useful if you need to assign post thumbnails for already existing blog posts using post images.By default it takes the first post image uploaded on server or externally hosted and assigns it as post thumbnail. Interface is based on Ajax to prevent timeout issues.
+Plugin performs mass manipulation on posts Featured Image property and uploads files if they are stored externally. Don't forget to backup your files and database before using this plugin. 
+
+It displays log of success/fails. There is also a feature to remove all Featured Images from all posts - this only changes post setting, no actual files are removed.
 
 Related Links:
 
@@ -43,6 +45,12 @@ If there is no image for specified image number in the post, then no thumbnail w
 
 == Changelog ==
 
+= 0.8 =
+* Tested with WP 3.1
+* Added url decoding
+* Added live log 
+* Removing thumbnails feature
+
 = 0.7 =
 * Fixed the bug when external images contain query parameters
 
@@ -57,6 +65,9 @@ If there is no image for specified image number in the post, then no thumbnail w
 * Released plugin initial version
 
 == Upgrade Notice ==
+
+= 0.8 =
+* Working with WP 3.1, new features - live log and removing thumbnails
 
 = 0.7 =
 * Fixed the bug when external images contain query parameters

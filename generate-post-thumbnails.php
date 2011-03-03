@@ -2,7 +2,7 @@
   Plugin Name:  Generate Post Thumbnails
   Plugin URI:   http://wordpress.shaldybina.com/plugins/generate-post-thumbnails/
   Description:  Tool for mass generation of Wordpress posts thumbnails using the post images.
-  Version:      0.7
+  Version:      0.8
   Author:       Maria Shaldybina
   Author URI:   http://shaldybina.com/
 */
@@ -26,6 +26,7 @@ class GeneratePostThumbnails {
 		// Uncomment the following line if you want autogeneration of thumbnails after post was saved
 		//add_action( 'save_post', array( $this, 'process_images' ) );
 		add_action( 'wp_ajax_generate_post_thumbnails', array( $this, 'ajax_process_post' ) );
+		add_action( 'wp_ajax_remove_post_thumbnails', array( $this, 'ajax_remove_featured_image' ) );
 	}
 
 	function add_admin_menu() { // admin menu item
@@ -35,7 +36,10 @@ class GeneratePostThumbnails {
 	}
 
 	function admin_scripts() {
-		wp_enqueue_script( 'jquery-ui-progressbar', plugins_url( 'jquery-ui/ui.progressbar.min.js', __FILE__), array('jquery-ui-core'), '1.7.2' );
+		if ( wp_script_is( 'jquery-ui-widget', 'registered' ) )
+			wp_enqueue_script( 'jquery-ui-progressbar', plugins_url( 'jquery-ui/jquery.ui.progressbar.min.js', __FILE__ ), array( 'jquery-ui-core', 'jquery-ui-widget' ), '1.8.6' );
+		else
+			wp_enqueue_script( 'jquery-ui-progressbar', plugins_url( 'jquery-ui/jquery.ui.progressbar.min.1.7.2.js', __FILE__ ), array( 'jquery-ui-core' ), '1.7.2' );
 	}
 
 	function admin_styles() {
@@ -49,6 +53,8 @@ class GeneratePostThumbnails {
 <div class="icon32" id="icon-tools"><br/></div>
 	<h2><?php _e( 'Thumbnails Generation', 'generate-post-thumbnails' ); ?></h2>
 	<div class="metabox-holder">
+	<div class="updated"><p>PLEASE NOTE: This plugin performs mass manipulation. Backup your database and files before using it.</p></div>
+	<noscript><div class="error"><p><?php _e( 'Javascript is disabled, please enable javascript for proper plugin work.', 'generate-post-thumbnails' ); ?></p></div></noscript>
 	<?php if ( !current_theme_supports( 'post-thumbnails' ) ) { /* theme should support post-thumbnails*/ ?>
 	<div class="error"><p><strong><?php _e( 'Plugin warning', 'generate-post-thumbnails' ); ?>:</strong> <?php _e( 'Your current theme does not support thumbnails. You need to adjust your theme in order to use this plugin. Please read plugin page for more information. Settings will appear on this page once you enable thumbnails in your theme.', 'generate-post-thumbnails' ); ?></p></div>
 	<?php
@@ -56,26 +62,13 @@ class GeneratePostThumbnails {
 	else {
 		global $wpdb;
 		$posts = array();
-		$posts = $wpdb->get_results( "select ID from $wpdb->posts where post_type = 'post'" );
+		$posts = $wpdb->get_results( "select ID from $wpdb->posts where post_type = 'post' and post_status != 'auto-draft'" );
 		$posts_count = count( $posts );
 		$posts_ids = array();
 		foreach ( $posts as $post ) {
 			$posts_ids[] = $post->ID;
 		}
 		$message = '';
-
-		if ( isset( $_POST['generate-thumbnails-submit'] ) ) { // if javascript is not supported and form was submitted
-			if ( !current_user_can( 'manage_options' ) ) {
-				wp_die( __( 'No access' ) );
-			}
-			check_admin_referer( 'generate-thumbnails' );
-			set_time_limit( 60 );
-			$overwrite = ( isset( $_POST['overwrite'] ) ) ? 'overwrite' : 'skip'; // overwrite or skip current images
-			foreach ( $posts_ids as $post_id ) {
-				$this->process_images( $post_id, $overwrite, $_POST['imagenumber'] );
-			}
-			$message = sprintf( $success_message, count( $posts ) );
-		}
 		?>
 		<div id="message" class="updated" <?php if ( empty($message) ) : ?>style="display: none;"<?php endif; ?>><?php echo $message; ?></div>
 		<?php if ( ! ( ( $uploads = wp_upload_dir( current_time( 'mysql' ) ) ) && false === $uploads['error'] ) ) : ?>
@@ -97,16 +90,34 @@ class GeneratePostThumbnails {
 				</table>
 			</div>
 			<input id="generate-thumbnail-button" name="Submit" value="<?php _e( 'Generate thumbnails', 'generate-post-thumbnails' ); ?>" type="submit" class="button"/>
-			<noscript><p><?php _e( 'Javascript is disabled, you will be redirected. Please do not close your page until the process is finished.', 'generate-post-thumbnails' ); ?></p></noscript>
 			<script type="text/javascript">
+				var errors = {
+				'1': 'Image from post body was successfully assigned as featured image',
+				'2': 'External image was successfully uploaded and assigned as featured image',
+				'5': 'Post has featured image already. Skipping',
+				'6': 'No image found in the post',
+				'100': 'No post found with such ID',
+				'101': 'Incorrect image number',
+				'102': 'Uploading directory is not accessible',
+				'103': 'External server is not responding',
+				'104': 'Remote server does not return image',
+				'105': 'Uplaod was not successful',
+				'106': 'Can not get file type from uploaded image',
+				'200': 'Can not assign featured image',
+				'500': 'Featured Image was removed',
+				'501': 'Post has no Featured Image',
+				'1000': 'You don not have rights to change Featured Image for the post'
+				};
 				jQuery(document).ready(function($) {
-						$("#generate_thumbs_form").submit(function(event) {
+						function ProcessThumbnails(event) {
 							event.preventDefault();
 							$("#generate-thumbnail-button").attr('disabled', true);
+							$("#remove-thumbnail-button").attr('disabled', true);
 							$("#message").html("<?php _e( 'Please wait until the process is finished. This process may take up to several minutes, depending on the number of posts and server capacity.', 'generate-post-thumbnails' ); ?>");
 							$("#message").show();
 							$("#gt_progressbar").progressbar({ value: 0 });
 							$("#gt_progressbar_percent").html("0%");
+							$("#gpt-log").val('');
 							var gt_count       = 1;
 							var gt_percent     = 0;
 							var gt_posts       = [<?php echo implode(", ", $posts_ids); ?>];
@@ -114,28 +125,40 @@ class GeneratePostThumbnails {
 							var gt_overwrite   = $("#overwrite").is(':checked') ? 'overwrite' : 'skip';
 							var gt_imagenumber = $("#imagenumber").val();
 
-							function GenerateThumbnails(post_id) {
-								$.post(ajaxurl, {action: "generate_post_thumbnails", post_id: post_id, overwrite: gt_overwrite, imagenumber: gt_imagenumber}, function(response){
+							function EditThumbnails(post_id) {
+								$.post(ajaxurl, {action: event.data.action, post_id: post_id, overwrite: gt_overwrite, imagenumber: gt_imagenumber}, function(response){
 										gt_percent = (gt_total > 0) ? (gt_count / gt_total) * 100 : 0;
 										$("#gt_progressbar").progressbar("value", gt_percent);
 										$("#gt_progressbar_percent").html(Math.round(gt_percent) + "%");
+										log_text = 'Post: '+post_id+'. '+errors[response]+'...\n';
+										$("#gpt-log").val($("#gpt-log").val()+log_text);
 										gt_count++;
 										if (gt_posts.length) {
-											GenerateThumbnails(gt_posts.shift());
+											EditThumbnails(gt_posts.shift());
 										} else {
 											$("#message").html("<?php echo js_escape(sprintf($success_message, $posts_count)); ?>");
 											$("#generate-thumbnail-button").attr('disabled', false);
+											$("#remove-thumbnail-button").attr('disabled', false);
 										}
 									});
 							}
-							GenerateThumbnails(gt_posts.shift());
-							});
+							EditThumbnails(gt_posts.shift());
+						};
+						$("#generate_thumbs_form").submit({action: "generate_post_thumbnails"}, ProcessThumbnails);
+						$("#remove_thumbs_form").submit({action: "remove_post_thumbnails"}, ProcessThumbnails);
 					});
 			</script>
 		</form>
 		<div id="gt_progressbar" style="position:relative;width:80%;margin-top:20px;">
 			<label id="gt_progressbar_percent" style="position:absolute;left:50%;top:5px;margin-left:-20px;"></label>
 		</div>
+		<label>Live log:</label><br/>
+		<textarea rows="10" cols="70" id="gpt-log"></textarea>
+		<p>
+			<form id="remove_thumbs_form" action="?page=generate-post-thumbnails" method="POST">
+				<input id="remove-thumbnail-button" name="Remove" value="<?php _e( 'Remove all featured images from posts', 'generate-post-thumbnails' ); ?>" type="submit" class="button" onclick="return confirm('ARE YOU SURE YOU WANT TO REMOVE ALL FEATURED IMAGES?');"/>
+			</form>
+		</p>
 		<?php
 			} // endif theme supports thumbnails
 		?>
@@ -147,22 +170,21 @@ class GeneratePostThumbnails {
 	function process_images( $post_id, $overwrite = 'skip', $imagenumber = 1 ) { // generating thumbnail for a single post
 		$post = get_post($post_id);
 		if ( !$post ) // if post was not found by id
-			return false;
+			return 100;
 		if ( $overwrite == 'skip' && has_post_thumbnail($post_id) ) // check if skip existing thumbnail
-			return false;
+			return 5;
 		$wud		  = wp_upload_dir();
 		$upload_parts = parse_url( $wud['baseurl'] );
 		$image		  = '';
 		$imagenumber  = preg_replace( '/[^\d]/', '', $imagenumber );
 		//imagenumber was not set or 0
 		if ( empty($imagenumber) || $imagenumber == 0 )
-			return false;
+			return 101;
 		preg_match_all( '|<img.*?src=[\'"](.*?)[\'"].*?>|i', $post->post_content, $matches ); // search for uploaded images in the post
 		if ( isset($matches) && isset($matches[1][$imagenumber-1]) && strlen(trim($matches[1][$imagenumber-1])) > 0 )
 			$image = $matches[1][$imagenumber-1];
 		else { // if image was not found in post
-			delete_post_meta( $post->ID, '_thumbnail_id' );
-			return false;
+			return 6;
 		}
 
 		$saved_in_wordpress = false;
@@ -178,7 +200,7 @@ class GeneratePostThumbnails {
 				$thumbnail_html = wp_get_attachment_image( $attachment_id, 'thumbnail' );
 				if ( !empty($thumbnail_html) ) {
 					update_post_meta( $post->ID, '_thumbnail_id', $attachment_id );
-					return true;
+					return 1;
 				}
 			}
 		}
@@ -186,10 +208,10 @@ class GeneratePostThumbnails {
 		if ( !$saved_in_wordpress ) { // image is external
 
 			if ( ! ( ( $uploads = wp_upload_dir( current_time('mysql') ) ) && false === $uploads['error'] ) )
-				return false; // upload dir is not accessible
+				return 102; // upload dir is not accessible
 
 			$content = '';
-			$image = preg_replace('/\?.*/', '', $image);
+			$image = rawurldecode( preg_replace('/\?.*/', '', $image) );
 			$name_parts = pathinfo($image);
 			$filename = wp_unique_filename( $uploads['path'], $name_parts['basename'] );
 			$unique_name_parts = pathinfo($filename);
@@ -220,7 +242,7 @@ class GeneratePostThumbnails {
 				$fp = @fsockopen( $host, '80', $errno, $errstr, $timeout );
 
 				if( !$fp )
-					return false; // give up on connecting to remote host
+					return 103; // give up on connecting to remote host
 
 				fputs( $fp, "GET $path HTTP/1.0\r\n" .
 					   "Host: $host\r\n" .
@@ -240,14 +262,14 @@ class GeneratePostThumbnails {
 				$pos     = strpos( $content, "\r\n\r\n" );
 				$content = substr( $content, $pos + 4 );
 			}
-			
+
 			if ( empty( $content ) ) // nothing was found
-				return false;
-			
+				return 104;
+
 			file_put_contents( $newfile, $content ); // save image
 
 			if (! file_exists( $newfile ) ) // upload was not successful
-				return false;
+				return 105;
 
 			// Set correct file permissions
 			$stat = stat( dirname( $newfile ) );
@@ -259,7 +281,7 @@ class GeneratePostThumbnails {
 
 			// No file type! No point to proceed further
 			if ( ( !$type || !$ext ) && !current_user_can( 'unfiltered_upload' ) )
-				return false;
+				return 106;
 			$title = $unique_name_parts['filename'];
 			$content = '';
 
@@ -286,19 +308,26 @@ class GeneratePostThumbnails {
 			if ( !is_wp_error($thumb_id) ) {
 				wp_update_attachment_metadata( $thumb_id, wp_generate_attachment_metadata( $thumb_id, $newfile ) );
 				update_post_meta( $post->ID, '_thumbnail_id', $thumb_id );
-				return true;
+				return 2;
 			}
 		}
-		return false;
+		return 200;
 	} // endfunction process_images
+
+	function ajax_remove_featured_image()
+	{
+		if ( !current_user_can('manage_options') )
+			die('1000');
+		if (delete_post_meta( $_POST['post_id'], '_thumbnail_id' ))
+			die('500');
+		else
+			die('501');
+	}
 
 	function ajax_process_post() { // dealing with ajax requests
 		if ( !current_user_can('manage_options') )
-			die('0');
-		if ( $this->process_images( $_POST['post_id'], $_POST['overwrite'], $_POST['imagenumber'] ) )
-			die('1');
-		else
-			die('-1');
+			die('1000');
+		die( strval($this->process_images( $_POST['post_id'], $_POST['overwrite'], $_POST['imagenumber'] ) ));
 	}
 } // endclass
 
